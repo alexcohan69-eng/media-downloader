@@ -1,0 +1,580 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Media Downloader Playground</title>
+<style>
+  *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+  :root{
+    --bg:#0a0a0f;--surface:#12121a;--surface2:#1a1a26;--border:#2a2a3a;
+    --text:#e8e8f0;--muted:#7a7a8e;--accent:#6366f1;--accent2:#818cf8;
+    --green:#22c55e;--red:#ef4444;--yellow:#eab308;
+    --radius:12px;--radius-sm:8px;
+  }
+  body{
+    font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+    background:var(--bg);color:var(--text);min-height:100vh;
+    display:flex;flex-direction:column;align-items:center;padding:20px;
+  }
+  .container{width:100%;max-width:800px;margin:0 auto}
+
+  header{text-align:center;margin-bottom:40px;padding-top:20px}
+  header h1{
+    font-size:2rem;font-weight:700;
+    background:linear-gradient(135deg,var(--accent),var(--accent2),#a78bfa);
+    -webkit-background-clip:text;-webkit-text-fill-color:transparent;
+    background-clip:text;
+  }
+  header p{color:var(--muted);margin-top:8px;font-size:.95rem}
+
+  .card{
+    background:var(--surface);border:1px solid var(--border);
+    border-radius:var(--radius);padding:24px;margin-bottom:20px;
+  }
+  .card-title{
+    font-size:.85rem;text-transform:uppercase;letter-spacing:1.5px;
+    color:var(--muted);margin-bottom:16px;font-weight:600;
+  }
+
+  .input-group{margin-bottom:16px}
+  .input-group label{
+    display:block;font-size:.85rem;color:var(--muted);
+    margin-bottom:6px;font-weight:500;
+  }
+  input[type="text"],select{
+    width:100%;padding:12px 16px;background:var(--surface2);
+    border:1px solid var(--border);border-radius:var(--radius-sm);
+    color:var(--text);font-size:.95rem;outline:none;transition:border .2s;
+  }
+  input[type="text"]:focus,select:focus{border-color:var(--accent)}
+  input::placeholder{color:var(--muted)}
+
+  .row{display:flex;gap:16px}
+  .row .input-group{flex:1}
+
+  .checkbox-group{
+    display:flex;align-items:center;gap:10px;margin-top:4px;
+  }
+  .checkbox-group input[type="checkbox"]{
+    width:18px;height:18px;accent-color:var(--accent);cursor:pointer;
+  }
+  .checkbox-group label{margin:0;cursor:pointer;color:var(--text);font-size:.9rem}
+
+  .btn{
+    display:inline-flex;align-items:center;justify-content:center;gap:8px;
+    padding:12px 28px;border:none;border-radius:var(--radius-sm);
+    font-size:.95rem;font-weight:600;cursor:pointer;transition:all .2s;
+    width:100%;margin-top:8px;
+  }
+  .btn-primary{background:var(--accent);color:#fff}
+  .btn-primary:hover{background:var(--accent2);transform:translateY(-1px)}
+  .btn-primary:active{transform:translateY(0)}
+  .btn-primary:disabled{opacity:.5;cursor:not-allowed;transform:none}
+
+  .btn-secondary{
+    background:transparent;color:var(--accent);border:1px solid var(--border);
+  }
+  .btn-secondary:hover{border-color:var(--accent);background:rgba(99,102,241,.08)}
+
+  .btn-row{display:flex;gap:12px;margin-top:12px}
+  .btn-row .btn{flex:1}
+
+  .status{
+    display:flex;align-items:center;gap:8px;padding:12px 16px;
+    border-radius:var(--radius-sm);font-size:.9rem;margin-top:12px;
+    display:none;
+  }
+  .status.show{display:flex}
+  .status.loading{background:rgba(99,102,241,.1);color:var(--accent2);border:1px solid rgba(99,102,241,.2)}
+  .status.error{background:rgba(239,68,68,.1);color:var(--red);border:1px solid rgba(239,68,68,.2)}
+
+  .spinner{
+    width:18px;height:18px;border:2px solid var(--accent);
+    border-top-color:transparent;border-radius:50%;
+    animation:spin .8s linear infinite;flex-shrink:0;
+  }
+  @keyframes spin{to{transform:rotate(360deg)}}
+
+  .progress-bar{
+    width:100%;height:4px;background:var(--surface2);border-radius:2px;
+    overflow:hidden;margin-top:12px;display:none;
+  }
+  .progress-bar.show{display:block}
+  .progress-bar .fill{
+    height:100%;background:linear-gradient(90deg,var(--accent),var(--accent2));
+    border-radius:2px;transition:width .3s;width:0%;
+  }
+
+  .divider{
+    height:1px;background:var(--border);margin:20px 0;
+  }
+
+  .preview-box{
+    background:var(--surface2);border:1px solid var(--border);
+    border-radius:var(--radius-sm);min-height:200px;max-height:70vh;
+    overflow:auto;display:flex;align-items:center;justify-content:center;
+    padding:12px;margin-bottom:16px;
+  }
+  .preview-empty{color:var(--muted);font-size:.9rem;text-align:center}
+  .preview-box img,.preview-box video{
+    max-width:100%;max-height:65vh;border-radius:var(--radius-sm);
+  }
+  .preview-box audio{width:100%}
+  .preview-box a{
+    color:var(--accent2);background:rgba(99,102,241,.1);
+    border:1px solid rgba(99,102,241,.3);padding:12px 24px;
+    border-radius:var(--radius-sm);text-decoration:none;font-weight:600;
+  }
+
+  .telegram-bar{
+    margin-top:12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;
+    background:rgba(34,197,94,.1);border:1px solid rgba(34,197,94,.35);
+    border-radius:var(--radius);padding:10px 14px;font-size:.9rem;
+  }
+  .telegram-bar .tg-dot{
+    width:22px;height:22px;flex:0 0 22px;display:flex;align-items:center;justify-content:center;
+    border-radius:50%;background:var(--green);color:#fff;font-weight:700;font-size:.8rem;
+  }
+  .telegram-bar .tg-text{flex:1;color:var(--text);word-break:break-word;min-width:0}
+  .telegram-bar a{
+    white-space:nowrap;color:#fff;background:#229ed9;padding:6px 14px;
+    border-radius:var(--radius-sm);text-decoration:none;font-weight:600;font-size:.85rem;
+  }
+  .telegram-bar a:hover{filter:brightness(1.1)}
+
+  .caption-block{
+    background:var(--surface2);border-radius:var(--radius-sm);
+    padding:14px 16px;margin-bottom:16px;font-size:.95rem;line-height:1.5;
+    color:var(--text);word-break:break-word;white-space:pre-wrap;
+  }
+  .caption-block:empty{display:none}
+
+  .stats-row{
+    display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px;
+  }
+  .stat{
+    background:var(--surface2);border-radius:var(--radius-sm);padding:12px;
+    text-align:center;
+  }
+  .stat .label{
+    font-size:.7rem;color:var(--muted);text-transform:uppercase;
+    letter-spacing:1px;margin-bottom:4px;
+  }
+  .stat .value{font-size:1.05rem;font-weight:600;color:var(--accent2)}
+
+  .info-grid{
+    display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px;
+  }
+  .info-item{
+    background:var(--surface2);border-radius:var(--radius-sm);padding:12px;
+  }
+  .info-item .label{font-size:.75rem;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:4px}
+  .info-item .value{font-size:.95rem;word-break:break-all}
+
+  .source-link{
+    display:block;margin-bottom:16px;font-size:.9rem;
+    background:var(--surface2);border-radius:var(--radius-sm);padding:12px 16px;
+    color:var(--accent2);text-decoration:none;word-break:break-all;
+  }
+  .source-link:hover{text-decoration:underline}
+
+  .formats-list{
+    max-height:200px;overflow-y:auto;
+    border:1px solid var(--border);border-radius:var(--radius-sm);
+    display:none;
+  }
+  .formats-list.show{display:block}
+  .format-row{
+    display:grid;grid-template-columns:60px 1fr 1fr;gap:8px;
+    padding:8px 12px;border-bottom:1px solid var(--border);
+    font-size:.85rem;
+  }
+  .format-row:last-child{border-bottom:none}
+  .format-row .ext{color:var(--accent2);font-weight:600}
+  .format-row .res,.format-row .size{color:var(--muted)}
+  .format-header{
+    background:var(--surface2);position:sticky;top:0;
+    font-weight:600;color:var(--muted);text-transform:uppercase;
+    letter-spacing:1px;font-size:.7rem;
+  }
+
+  footer{text-align:center;color:var(--muted);font-size:.8rem;margin-top:40px;padding:20px 0}
+  footer a{color:var(--accent2);text-decoration:none}
+</style>
+</head>
+<body>
+<div class="container">
+  <header>
+    <h1>Media Downloader</h1>
+    <p>Paste any media URL to get info or download it directly</p>
+  </header>
+
+  <div class="card">
+    <div class="card-title">Configuration</div>
+    <div class="input-group">
+      <label>API Key</label>
+      <input type="text" id="apiKey" placeholder="Enter your API key" value="test-secret-key-123">
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-title">Media URL</div>
+    <div class="input-group">
+      <input type="text" id="mediaUrl" placeholder="Paste media URL here...">
+    </div>
+    <div class="input-group">
+      <label>Custom Caption (optional &mdash; replaces the real caption/title)</label>
+      <input type="text" id="customTitle" placeholder="e.g. My favorite video">
+    </div>
+    <div class="row">
+      <div class="input-group">
+        <label>Format</label>
+        <select id="format">
+          <option value="best">Best Quality</option>
+          <option value="bestvideo+bestaudio">Best Video + Audio</option>
+          <option value="bestaudio">Best Audio Only</option>
+          <option value="bestvideo">Best Video Only</option>
+          <option value="worst">Smallest File</option>
+        </select>
+      </div>
+      <div class="input-group">
+        <label>Cookie Browser</label>
+        <select id="browser">
+          <option value="">Default (Chrome)</option>
+          <option value="chrome">Chrome</option>
+          <option value="firefox">Firefox</option>
+          <option value="edge">Edge</option>
+          <option value="safari">Safari</option>
+          <option value="brave">Brave</option>
+        </select>
+      </div>
+    </div>
+    <div class="input-group">
+      <label>Cookie File (path on server, for age-restricted / NSFW content)</label>
+      <input type="text" id="cookieFile" placeholder="e.g. /data/data/com.termux/files/home/cookies.txt">
+    </div>
+    <div class="checkbox-group">
+      <input type="checkbox" id="sendTelegram">
+      <label for="sendTelegram">Send to Telegram</label>
+    </div>
+    <div class="btn-row">
+      <button class="btn btn-primary" id="infoBtn" onclick="getInfo()">
+        Get Info
+      </button>
+      <button class="btn btn-primary" id="downloadBtn" onclick="downloadMedia()" style="background:var(--green)">
+        Download
+      </button>
+    </div>
+    <div class="progress-bar" id="progressBar"><div class="fill" id="progressFill"></div></div>
+    <div class="status" id="status">
+      <div class="spinner" id="spinner"></div>
+      <span id="statusText"></span>
+    </div>
+
+    <div class="divider"></div>
+    <div class="preview-box" id="previewBox">
+      <div class="preview-empty" id="previewEmpty">Click Download to preview the media here</div>
+    </div>
+    <div class="telegram-bar" id="telegramBar" style="display:none"></div>
+    <div class="caption-block" id="dCaption"></div>
+    <div class="stats-row">
+      <div class="stat"><div class="label">Views</div><div class="value" id="dV">-</div></div>
+      <div class="stat"><div class="label">Likes</div><div class="value" id="dL">-</div></div>
+      <div class="stat"><div class="label">Reposts</div><div class="value" id="dR">-</div></div>
+      <div class="stat"><div class="label">Replies</div><div class="value" id="dC">-</div></div>
+    </div>
+    <div class="info-grid">
+      <div class="info-item"><div class="label">Title</div><div class="value" id="dTitle">-</div></div>
+      <div class="info-item"><div class="label">Type</div><div class="value" id="dType">-</div></div>
+      <div class="info-item"><div class="label">Uploader</div><div class="value" id="dUploader">-</div></div>
+      <div class="info-item"><div class="label">Duration</div><div class="value" id="dDuration">-</div></div>
+      <div class="info-item"><div class="label">Resolution</div><div class="value" id="dResolution">-</div></div>
+      <div class="info-item"><div class="label">Size</div><div class="value" id="dSize">-</div></div>
+    </div>
+    <a class="source-link" id="dSource" href="#" target="_blank" rel="noopener" style="display:none"></a>
+    <div class="formats-list" id="formatsList">
+      <div class="format-row format-header">
+        <span>Ext</span><span>Resolution</span><span>Size</span>
+      </div>
+      <div id="formatsRows"></div>
+    </div>
+  </div>
+
+  <footer>
+    Powered by <a href="https://github.com/yt-dlp/yt-dlp">yt-dlp</a> &middot; Universal Media Downloader API
+  </footer>
+</div>
+
+<script>
+const API = '';
+const $ = id => document.getElementById(id);
+
+function setProgress(pct) {
+  $('progressFill').style.width = pct + '%';
+}
+
+function setStatus(type, msg) {
+  const el = $('status');
+  const sp = $('spinner');
+  if (!type) { el.className = 'status'; sp.style.display = 'none'; return; }
+  el.className = 'status show ' + type;
+  $('statusText').textContent = msg;
+  sp.style.display = type === 'loading' ? 'block' : 'none';
+}
+
+function setLoading(loading) {
+  $('infoBtn').disabled = loading;
+  $('downloadBtn').disabled = loading;
+  $('progressBar').className = loading ? 'progress-bar show' : 'progress-bar';
+  if (loading) setProgress(0);
+}
+
+function getUrl() {
+  let url = $('mediaUrl').value.trim();
+  if (!url) return null;
+  const params = new URLSearchParams();
+  params.set('url', url);
+  params.set('format_str', $('format').value);
+  if ($('sendTelegram').checked) params.set('send_telegram', 'true');
+  const browser = $('browser').value;
+  if (browser) params.set('browser', browser);
+  const cookieFile = $('cookieFile').value.trim();
+  if (cookieFile) params.set('cookies', cookieFile);
+  const custom = $('customTitle').value.trim();
+  if (custom) params.set('title', custom);
+  return params.toString();
+}
+
+function clearForm() {
+  $('mediaUrl').value = '';
+  $('customTitle').value = '';
+  $('format').value = 'best';
+  $('browser').value = '';
+}
+
+function renderDetails(data, fileSize, resolution) {
+  $('dCaption').textContent = data.title || '';
+  $('dV').textContent = data.views != null ? formatCompact(data.views) : '-';
+  $('dL').textContent = data.likes != null ? formatCompact(data.likes) : '-';
+  $('dR').textContent = data.reposts != null ? formatCompact(data.reposts) : '-';
+  $('dC').textContent = data.comments != null ? formatCompact(data.comments) : '-';
+  $('dTitle').textContent = data.title || '-';
+  $('dType').textContent = data.type || '-';
+  $('dUploader').textContent = data.uploader || '-';
+  $('dDuration').textContent = data.duration ? formatDuration(data.duration) : '-';
+  $('dResolution').textContent = resolution || '-';
+  $('dSize').textContent = fileSize != null ? formatSize(fileSize) : '-';
+
+  const src = data.webpage_url || (data.formats && data.formats[0] && data.formats[0].url) || '';
+  const linkEl = $('dSource');
+  if (src) {
+    linkEl.href = src;
+    linkEl.textContent = 'Source: ' + src;
+    linkEl.style.display = 'block';
+  } else {
+    linkEl.style.display = 'none';
+  }
+
+  const rows = $('formatsRows');
+  rows.innerHTML = '';
+  const fl = $('formatsList');
+  fl.className = (data.formats && data.formats.length) ? 'formats-list show' : 'formats-list';
+  (data.formats || []).forEach(f => {
+    const row = document.createElement('div');
+    row.className = 'format-row';
+    row.innerHTML = `
+      <span class="ext">${f.ext}</span>
+      <span class="res">${f.resolution || '-'}</span>
+      <span class="size">${f.filesize ? formatSize(f.filesize) : '-'}</span>
+    `;
+    rows.appendChild(row);
+  });
+}
+
+function showPreview(contentType, blob) {
+  const box = $('previewBox');
+  const old = $('previewMedia');
+  if (old && old.src) URL.revokeObjectURL(old.src);
+  box.innerHTML = '';
+
+  const url = URL.createObjectURL(blob);
+  let el;
+  if (contentType.startsWith('image/')) {
+    el = document.createElement('img');
+  } else if (contentType.startsWith('video/')) {
+    el = document.createElement('video');
+    el.controls = true;
+  } else if (contentType.startsWith('audio/')) {
+    el = document.createElement('audio');
+    el.controls = true;
+  } else {
+    el = document.createElement('a');
+    el.href = url;
+    el.target = '_blank';
+    el.rel = 'noopener';
+    el.textContent = 'Open / save file';
+    box.appendChild(el);
+    return;
+  }
+  el.id = 'previewMedia';
+  el.src = url;
+  box.appendChild(el);
+}
+
+async function getInfo() {
+  const url = $('mediaUrl').value.trim();
+  if (!url) { setStatus('error', 'Please enter a URL'); return; }
+  const qs = getUrl();
+  setLoading(true);
+  setStatus('loading', 'Extracting media info...');
+
+  try {
+    const res = await fetch(`${API}/api/v1/info?${qs}`, {
+      headers: { 'X-API-Key': $('apiKey').value }
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || 'Request failed');
+
+    renderDetails(data, null, null);
+    setStatus('');
+  } catch (e) {
+    setStatus('error', e.message);
+  } finally {
+    setLoading(false);
+  }
+}
+
+async function downloadMedia() {
+  const url = $('mediaUrl').value.trim();
+  if (!url) { setStatus('error', 'Please enter a URL'); return; }
+  const qs = getUrl();
+  setLoading(true);
+  setStatus('loading', 'Downloading media...');
+
+  let progress = 0;
+  const progTimer = setInterval(() => {
+    progress = Math.min(progress + Math.random() * 8, 92);
+    setProgress(progress);
+  }, 800);
+
+  try {
+    const [res, infoRes] = await Promise.all([
+      fetch(`${API}/api/v1/download?${qs}`, { headers: { 'X-API-Key': $('apiKey').value } }),
+      fetch(`${API}/api/v1/info?${qs}`, { headers: { 'X-API-Key': $('apiKey').value } }).catch(() => null)
+    ]);
+
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.detail || 'Download failed');
+    }
+
+    setProgress(95);
+    let info = null;
+    if (infoRes && infoRes.ok) {
+      info = await infoRes.json().catch(() => null);
+    }
+
+    const contentType = res.headers.get('Content-Type') || 'application/octet-stream';
+    const blob = await res.blob();
+    showPreview(contentType, blob);
+
+    const resolution = firstResolution(info);
+    renderDetails(info || { formats: [] }, blob.size, resolution);
+
+    const telegramSent = res.headers.get('X-Telegram-Sent') === 'true';
+    if (telegramSent) {
+      showTelegramBar(
+        res.headers.get('X-Telegram-Link'),
+        res.headers.get('X-Telegram-Message-Id'),
+        (info && info.title) || ''
+      );
+    } else {
+      hideTelegramBar();
+    }
+
+    setProgress(100);
+    setStatus('');
+    clearForm();
+  } catch (e) {
+    setStatus('error', e.message);
+  } finally {
+    clearInterval(progTimer);
+    setLoading(false);
+  }
+}
+
+function firstResolution(info) {
+  if (info && info.formats && info.formats[0] && info.formats[0].resolution) {
+    return info.formats[0].resolution;
+  }
+  return null;
+}
+
+function showTelegramBar(link, messageId, title) {
+  const bar = $('telegramBar');
+  bar.innerHTML = '';
+  bar.style.display = 'flex';
+  const dot = document.createElement('span');
+  dot.className = 'tg-dot';
+  dot.textContent = '✓';
+  const txt = document.createElement('span');
+  txt.className = 'tg-text';
+  const cap = (title || '').trim();
+  txt.textContent = 'Sent to Telegram · message ' + (messageId || '') + (cap ? ' · ' + cap : '');
+  const a = document.createElement('a');
+  a.href = link || '#';
+  a.target = '_blank';
+  a.rel = 'noopener';
+  a.textContent = 'Open in Telegram';
+  bar.appendChild(dot);
+  bar.appendChild(txt);
+  bar.appendChild(a);
+}
+
+function hideTelegramBar() {
+  const bar = $('telegramBar');
+  bar.style.display = 'none';
+  bar.innerHTML = '';
+}
+
+function formatSize(bytes) {
+  if (bytes === 0) return '0 B';
+  const units = ['B','KB','MB','GB','TB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(1024));
+  return (bytes / Math.pow(1024, i)).toFixed(i === 0 ? 0 : 1) + ' ' + units[i];
+}
+
+function formatCompact(n) {
+  if (n == null) return '-';
+  if (n < 1000) return String(n);
+  const units = ['K','M','B','T'];
+  let i = -1;
+  let v = n;
+  while (v >= 1000 && i < units.length - 1) { v /= 1000; i++; }
+  return v >= 100 ? Math.round(v) + units[i] : (Math.round(v * 10) / 10) + units[i];
+}
+
+function formatDuration(secs) {
+  const h = Math.floor(secs / 3600);
+  const m = Math.floor((secs % 3600) / 60);
+  const s = Math.floor(secs % 60);
+  if (h > 0) return `${h}h ${m}m ${s}s`;
+  if (m > 0) return `${m}m ${s}s`;
+  return `${s}s`;
+}
+
+$('mediaUrl').addEventListener('keydown', e => {
+  if (e.key === 'Enter') getInfo();
+});
+
+(function persistTelegramCheckbox() {
+  const cb = $('sendTelegram');
+  cb.checked = localStorage.getItem('sendTelegram') === '1';
+  cb.addEventListener('change', () => {
+    localStorage.setItem('sendTelegram', cb.checked ? '1' : '0');
+  });
+})();
+</script>
+</body>
+</html>

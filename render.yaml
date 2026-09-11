@@ -1,0 +1,27 @@
+services:
+  - type: web
+    name: media-downloader
+    runtime: docker
+    plan: free
+    region: singapore
+    healthCheckPath: /health
+    # Dockerfile uses ${PORT} (Render auto-injects it)
+    envVars:
+      # Set these in the Render dashboard (sync: false keeps secrets out of git):
+      - key: API_KEYS
+        sync: false
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_CHAT_ID
+        sync: false
+      - key: TELEGRAM_LOCAL_API_URL
+        sync: false
+      - key: HOST
+        value: 0.0.0.0
+      - key: COOKIE_BROWSER
+        value: chrome
+      # Free instances have ~512MB RAM; lower this if downloads go OOM.
+      - key: MAX_FILE_SIZE_MB
+        value: "1024"
+      - key: TEMP_DIR
+        value: /tmp/media-downloader
