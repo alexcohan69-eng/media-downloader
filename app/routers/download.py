@@ -139,11 +139,13 @@ async def download_media(
     if send_telegram:
         sender = TelegramSender()
         try:
+            item_paths = [item.file_path for item in result.items] if result.is_album else None
             sent = await sender.send_media(
                 result.file_path,
                 result.filename,
                 caption=translated_caption,
                 use_userbot=use_userbot,
+                items=item_paths,
             )
         except Exception as e:
             downloader._cleanup(result.tmp_path)
@@ -158,6 +160,9 @@ async def download_media(
         headers["X-Telegram-Link"] = sent["link"]
         headers["X-Telegram-Message-Id"] = str(sent["message_id"])
         headers["X-Telegram-Sender"] = sent.get("sender", "bot")
+        if result.is_album:
+            headers["X-Telegram-Album"] = "true"
+            headers["X-Telegram-Media-Count"] = str(len(result.items))
 
     if auto_translate and translated_caption and translated_caption != caption:
         headers["X-Translated-Caption"] = translated_caption

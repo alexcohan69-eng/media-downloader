@@ -38,6 +38,8 @@ app.add_middleware(
         "X-Telegram-Link",
         "X-Telegram-Message-Id",
         "X-Telegram-Sender",
+        "X-Telegram-Album",
+        "X-Telegram-Media-Count",
     ],
 )
 

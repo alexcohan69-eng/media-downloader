@@ -4,11 +4,14 @@ import logging
 import mimetypes
 import os
 import re
+import shutil
 import tempfile
-from dataclasses import dataclass
+import zipfile
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Generator
 
+import httpx
 import yt_dlp
 
 from app.config import settings
@@ -36,6 +39,14 @@ def _browser_cookies_only(opts: dict[str, Any]) -> bool:
 
 
 @dataclass
+class DownloadedItem:
+    file_path: Path
+    filename: str
+    media_type: str
+    file_size: int
+
+
+@dataclass
 class DownloadResult:
     stream: Generator[bytes, None, None]
     filename: str
@@ -43,7 +54,8 @@ class DownloadResult:
     file_size: int
     tmp_path: Path
     file_path: Path
-
+    items: list[DownloadedItem] = field(default_factory=list)
+    is_album: bool = False
 
 
 class MediaDownloader:
@@ -101,9 +113,10 @@ class MediaDownloader:
                     )
                     for i, img in enumerate(page.images)
                 ]
+                is_alb = len(page.images) > 1
                 return MediaInfo(
                     title=page.title,
-                    type=page.media_type,
+                    type="album" if is_alb else page.media_type,
                     thumbnail=page.images[0],
                     uploader=page.uploader,
                     extractor="page-image",
@@ -113,8 +126,36 @@ class MediaDownloader:
                     reposts=page.reposts,
                     comments=page.comments,
                     formats=formats,
+                    is_album=is_alb,
+                    media_count=len(page.images),
                 )
             raise
+
+        # Check if yt-dlp extracted playlist / multi-item gallery
+        entries = raw.get("entries")
+        if entries:
+            entries_list = [e for e in entries if e]
+            if len(entries_list) > 1:
+                formats = []
+                for e in entries_list:
+                    entry_formats = sanitize_formats(e.get("formats", []))
+                    formats.extend([FormatInfo(**f) for f in entry_formats[:2]])
+                return MediaInfo(
+                    title=raw.get("title") or (entries_list[0].get("title") if entries_list else None),
+                    type="album",
+                    duration=raw.get("duration"),
+                    thumbnail=raw.get("thumbnail") or (entries_list[0].get("thumbnail") if entries_list else None),
+                    uploader=raw.get("uploader") or raw.get("channel"),
+                    extractor=raw.get("extractor"),
+                    webpage_url=raw.get("webpage_url") or url,
+                    views=raw.get("view_count"),
+                    likes=raw.get("like_count"),
+                    reposts=raw.get("repost_count"),
+                    comments=raw.get("comment_count"),
+                    formats=formats,
+                    is_album=True,
+                    media_count=len(entries_list),
+                )
 
         media_type = get_media_type(raw)
         formats = sanitize_formats(raw.get("formats", []))
@@ -132,6 +173,8 @@ class MediaDownloader:
             reposts=raw.get("repost_count"),
             comments=raw.get("comment_count"),
             formats=[FormatInfo(**f) for f in formats],
+            is_album=False,
+            media_count=1,
         )
 
     def download(
@@ -141,8 +184,9 @@ class MediaDownloader:
         audio_only: bool = False,
         title: str | None = None,
     ) -> DownloadResult:
-        tmp_path = self._create_tmp_path()
-        outtmpl = str(tmp_path.with_suffix(".%(ext)s"))
+        settings.temp_path.mkdir(parents=True, exist_ok=True)
+        batch_dir = Path(tempfile.mkdtemp(dir=settings.temp_path, prefix="dl_batch_"))
+        outtmpl = str(batch_dir / "%(playlist_index&{:02d}_|)s%(title).80B.%(ext)s")
 
         opts = self._build_opts(
             format_str=format_str,
@@ -151,67 +195,138 @@ class MediaDownloader:
         )
 
         try:
+            info: dict[str, Any] = {}
             fallback_page: PageImages | None = None
             try:
                 info = self._extract(url, download=True, opts=opts)
-                downloaded = self._find_downloaded_file(tmp_path, info)
             except Exception:
                 page = self._page_images(url)
-                if not page.images:
+                if not page or not page.images:
                     raise
-                logger.info("Using page-image fallback for %s (%d images)", url, len(page.images))
-                self._cleanup(tmp_path)
+                logger.info("Using page-image fallback for %s (%d media items)", url, len(page.images))
                 fallback_page = page
-                image_url = page.images[0]
-                info = self._extract(image_url, download=True, opts=opts)
-                downloaded = self._find_downloaded_file(tmp_path, info)
+                with httpx.Client(timeout=60, follow_redirects=True) as client:
+                    for idx, img_url in enumerate(page.images):
+                        ext = ext_from_image_url(img_url)
+                        prefix = f"{idx+1:02d}_" if len(page.images) > 1 else ""
+                        item_file = batch_dir / f"{prefix}media_{idx+1}.{ext}"
+                        try:
+                            resp = client.get(img_url)
+                            if resp.status_code == 200 and resp.content:
+                                item_file.write_bytes(resp.content)
+                        except Exception as e:
+                            logger.warning("Could not download media item %s: %s", img_url, e)
 
-            if downloaded.suffix.lstrip(".") in ("", "unknown_video", "unknown_audio", "html"):
-                correct_ext = ext_from_image_url(
-                    (fallback_page.images[0] if fallback_page else url) or url
-                )
-                new_path = downloaded.with_suffix(f".{correct_ext}")
-                os.replace(downloaded, new_path)
-                downloaded = new_path
+            # Discover all valid downloaded files
+            downloaded_files = sorted(
+                [
+                    f for f in batch_dir.iterdir()
+                    if f.is_file()
+                    and not f.name.endswith(".tmp")
+                    and not f.name.endswith(".part")
+                    and not f.name.endswith(".ytdl")
+                ]
+            )
 
-            if fallback_page and fallback_page.title:
-                info = dict(info)
-                info["title"] = fallback_page.title
+            if not downloaded_files:
+                raise ValueError(f"No media files were downloaded for: {url}")
 
-            if title:
-                info = dict(info)
-                info["title"] = title
+            # Check individual extensions and fix unknown extensions
+            for f in downloaded_files:
+                if f.suffix.lstrip(".") in ("", "unknown_video", "unknown_audio", "html"):
+                    correct_ext = ext_from_image_url(url)
+                    new_path = f.with_suffix(f".{correct_ext}")
+                    os.replace(f, new_path)
 
-            file_size = downloaded.stat().st_size
-            if file_size > settings.max_file_size_bytes:
-                raise ValueError(
-                    f"File too large: {file_size} bytes "
-                    f"(max: {settings.max_file_size_bytes} bytes)"
-                )
+            downloaded_files = sorted(
+                [
+                    f for f in batch_dir.iterdir()
+                    if f.is_file()
+                    and not f.name.endswith(".tmp")
+                    and not f.name.endswith(".part")
+                ]
+            )
 
-            ext = downloaded.suffix.lstrip(".") or "mp4"
-            media_type = mimetypes.guess_type(downloaded.name)[0] or "application/octet-stream"
-
-            title = info.get("title") or "download"
+            resolved_title = title or (fallback_page.title if fallback_page else None) or info.get("title") or "download"
             safe_stem = "".join(
-                c if (c.isalnum() and ord(c) < 128) or c in "._-" else "_" for c in title
-            )[:200]
+                c if (c.isalnum() and ord(c) < 128) or c in "._-" else "_" for c in resolved_title
+            )[:200].strip("._")
             if not any(ch.isalnum() for ch in safe_stem):
                 tail = url.rstrip("/").split("?")[0].split("/")[-1]
                 safe_stem = f"media_{re.sub(r'[^A-Za-z0-9._-]', '_', tail)}"
-            filename = f"{safe_stem}.{ext}"
 
+            # 1. Single Media Item
+            if len(downloaded_files) == 1:
+                single_file = downloaded_files[0]
+                file_size = single_file.stat().st_size
+                if file_size > settings.max_file_size_bytes:
+                    raise ValueError(f"File too large: {file_size} bytes (max: {settings.max_file_size_bytes})")
+
+                ext = single_file.suffix.lstrip(".") or "mp4"
+                media_type = mimetypes.guess_type(single_file.name)[0] or "application/octet-stream"
+                final_filename = f"{safe_stem}.{ext}"
+
+                items = [
+                    DownloadedItem(
+                        file_path=single_file,
+                        filename=final_filename,
+                        media_type=media_type,
+                        file_size=file_size,
+                    )
+                ]
+
+                return DownloadResult(
+                    stream=self._stream_and_cleanup(single_file, batch_dir),
+                    filename=final_filename,
+                    media_type=media_type,
+                    file_size=file_size,
+                    tmp_path=batch_dir,
+                    file_path=single_file,
+                    items=items,
+                    is_album=False,
+                )
+
+            # 2. Album / Multiple Media Items
+            total_size = sum(f.stat().st_size for f in downloaded_files)
+            if total_size > settings.max_file_size_bytes:
+                raise ValueError(
+                    f"Album total size ({total_size / (1024*1024):.1f}MB) exceeds limit "
+                    f"({settings.max_file_size_mb}MB)"
+                )
+
+            items = []
+            for f in downloaded_files:
+                mime = mimetypes.guess_type(f.name)[0] or "application/octet-stream"
+                items.append(
+                    DownloadedItem(
+                        file_path=f,
+                        filename=f.name,
+                        media_type=mime,
+                        file_size=f.stat().st_size,
+                    )
+                )
+
+            # Create ZIP bundle for album downloads
+            zip_filename = f"{safe_stem}_album.zip"
+            zip_path = batch_dir.parent / f"{batch_dir.name}.zip"
+            with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+                for f in downloaded_files:
+                    zf.write(f, arcname=f.name)
+
+            zip_size = zip_path.stat().st_size
             return DownloadResult(
-                stream=self._stream_and_cleanup(downloaded, tmp_path),
-                filename=filename,
-                media_type=media_type,
-                file_size=file_size,
-                tmp_path=tmp_path,
-                file_path=downloaded,
+                stream=self._stream_and_cleanup(zip_path, batch_dir),
+                filename=zip_filename,
+                media_type="application/zip",
+                file_size=zip_size,
+                tmp_path=batch_dir,
+                file_path=zip_path,
+                items=items,
+                is_album=True,
             )
 
         except Exception as e:
-            self._cleanup(tmp_path)
+            self._cleanup(batch_dir)
             logger.error("Download failed: %s", e)
             raise
 
@@ -225,51 +340,30 @@ class MediaDownloader:
         return extract_page_images(url, cookie_file=self.cookie_file)
 
     def _stream_and_cleanup(
-        self, file_path: Path, tmp_path: Path
+        self, stream_file: Path, batch_dir: Path
     ) -> Generator[bytes, None, None]:
         try:
-            with open(file_path, "rb") as f:
+            with open(stream_file, "rb") as f:
                 while chunk := f.read(CHUNK_SIZE):
                     yield chunk
         finally:
-            self._cleanup(tmp_path)
+            self._cleanup(batch_dir)
+            if stream_file != batch_dir and stream_file.exists():
+                try:
+                    stream_file.unlink(missing_ok=True)
+                except Exception:
+                    pass
 
-    def _create_tmp_path(self) -> Path:
-        tmp_dir = settings.temp_path
-        tmp_dir.mkdir(parents=True, exist_ok=True)
-
-        tmp_file = tempfile.NamedTemporaryFile(
-            dir=tmp_dir, delete=False, suffix=".tmp"
-        )
-        tmp_path = Path(tmp_file.name)
-        tmp_file.close()
-        return tmp_path
-
-    def _find_downloaded_file(
-        self, base_path: Path, info: dict[str, Any]
-    ) -> Path:
-        ext = info.get("ext", "mp4")
-        expected = base_path.with_suffix(f".{ext}")
-        if expected.exists():
-            return expected
-
-        parent = base_path.parent
-        stem = Path(base_path.name).stem
-        for f in parent.iterdir():
-            if f.name.startswith(stem) and f.suffix and f.suffix != ".tmp":
-                return f
-
-        raise ValueError(f"Downloaded file not found at {expected}")
-
-    def _cleanup(self, tmp_path: Path) -> None:
-        parent = tmp_path.parent
-        stem = Path(tmp_path.name).stem
+    def _cleanup(self, path: Path | None) -> None:
+        if path is None:
+            return
         try:
-            for f in parent.iterdir():
-                if f.name.startswith(stem):
-                    try:
-                        f.unlink()
-                    except OSError:
-                        pass
-        except OSError:
+            if path.is_dir():
+                shutil.rmtree(path, ignore_errors=True)
+            elif path.is_file():
+                path.unlink(missing_ok=True)
+            zip_candidate = path.parent / f"{path.name}.zip"
+            if zip_candidate.exists():
+                zip_candidate.unlink(missing_ok=True)
+        except Exception:
             pass

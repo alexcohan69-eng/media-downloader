@@ -339,9 +339,10 @@ function showPreview(ct, blob) {
   el.src = url; box.appendChild(el);
 }
 
-function showTGBar(link, msgId, title, sender) {
+function showTGBar(link, msgId, title, sender, isAlbum, mediaCount) {
   const via = sender === 'userbot' ? 'Userbot (>50MB)' : 'Bot';
-  $('tgText').textContent = 'Sent via ' + via + ' · msg ' + (msgId||'') + (title ? ' · '+title.slice(0,60) : '');
+  const albumNote = isAlbum ? `Album (${mediaCount || ''} media) ` : '';
+  $('tgText').textContent = 'Sent ' + albumNote + 'via ' + via + ' · msg ' + (msgId||'') + (title ? ' · '+title.slice(0,60) : '');
   $('tgLink').href = link || '#';
   $('telegramBar').classList.add('show');
 }
@@ -405,7 +406,11 @@ async function downloadMedia() {
     showPreview(ct, blob);
     const res0 = info && info.formats && info.formats[0] && info.formats[0].resolution || null;
     renderDetails(info || { formats: [] }, blob.size, res0);
-    if (res.headers.get('X-Telegram-Sent') === 'true') showTGBar(res.headers.get('X-Telegram-Link'), res.headers.get('X-Telegram-Message-Id'), info && info.title || '', res.headers.get('X-Telegram-Sender') || 'bot');
+    if (res.headers.get('X-Telegram-Sent') === 'true') {
+      const isAlb = res.headers.get('X-Telegram-Album') === 'true';
+      const mCount = res.headers.get('X-Telegram-Media-Count');
+      showTGBar(res.headers.get('X-Telegram-Link'), res.headers.get('X-Telegram-Message-Id'), info && info.title || '', res.headers.get('X-Telegram-Sender') || 'bot', isAlb, mCount);
+    }
     const trCap = res.headers.get('X-Translated-Caption');
     const trLang = res.headers.get('X-Detected-Lang');
     if (trCap) {
