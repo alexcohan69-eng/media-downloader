@@ -17,9 +17,16 @@ class Settings(BaseSettings):
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
     telegram_local_api_url: str | None = None
+    telegram_api_id: int | None = None
+    telegram_api_hash: str | None = None
+    telegram_session_string: str | None = None
     cors_origins: list[str] = ["*"]
 
-    model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
+    model_config = {
+        "env_file": ".env",
+        "env_file_encoding": "utf-8",
+        "extra": "ignore",
+    }
 
     @property
     def max_file_size_bytes(self) -> int:

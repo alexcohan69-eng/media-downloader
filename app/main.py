@@ -1,16 +1,26 @@
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
 from app.config import settings
 from app.routers.download import router as download_router
+from app.services.telegram import TelegramSender
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    yield
+    await TelegramSender.close_userbot_client()
+
 
 app = FastAPI(
     title="Universal Media Downloader API",
     description="Download any media from any site. Just provide a URL.",
     version="1.0.0",
+    lifespan=lifespan,
 )
 
 def _cors_allow_credentials() -> bool:
@@ -27,6 +37,7 @@ app.add_middleware(
         "X-Telegram-Sent",
         "X-Telegram-Link",
         "X-Telegram-Message-Id",
+        "X-Telegram-Sender",
     ],
 )
 
