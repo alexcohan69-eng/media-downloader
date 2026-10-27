@@ -26,7 +26,7 @@ class TelegramSender:
     def __init__(
         self,
         token: str | None = None,
-        chat_id: str | None = None,
+        chat_id: str | int | None = None,
         local_api_url: str | None = None,
         api_id: int | None = None,
         api_hash: str | None = None,
@@ -53,11 +53,11 @@ class TelegramSender:
 
     @property
     def can_use_bot(self) -> bool:
-        return bool(self.token and self.chat_id)
+        return bool(self.token)
 
     @property
     def can_use_userbot(self) -> bool:
-        return bool(self.api_id and self.api_hash and self.session_string and self.chat_id)
+        return bool(self.api_id and self.api_hash and self.session_string)
 
     @classmethod
     async def get_userbot_client(
@@ -90,6 +90,83 @@ class TelegramSender:
             finally:
                 cls._userbot_client = None
 
+    async def send_message(
+        self,
+        chat_id: int | str,
+        text: str,
+        reply_to_message_id: int | None = None,
+        reply_markup: dict | None = None,
+        parse_mode: str = "HTML",
+    ) -> dict:
+        url = f"{self.api_base}/bot{self.token}/sendMessage"
+        payload: dict[str, Any] = {
+            "chat_id": chat_id,
+            "text": text,
+            "parse_mode": parse_mode,
+            "disable_web_page_preview": True,
+        }
+        if reply_to_message_id:
+            payload["reply_parameters"] = {"message_id": reply_to_message_id}
+        if reply_markup:
+            payload["reply_markup"] = reply_markup
+
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.post(url, json=payload)
+            return resp.json()
+
+    async def edit_message_text(
+        self,
+        chat_id: int | str,
+        message_id: int,
+        text: str,
+        reply_markup: dict | None = None,
+        parse_mode: str = "HTML",
+    ) -> dict:
+        url = f"{self.api_base}/bot{self.token}/editMessageText"
+        payload: dict[str, Any] = {
+            "chat_id": chat_id,
+            "message_id": message_id,
+            "text": text,
+            "parse_mode": parse_mode,
+            "disable_web_page_preview": True,
+        }
+        if reply_markup:
+            payload["reply_markup"] = reply_markup
+
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.post(url, json=payload)
+            return resp.json()
+
+    async def delete_message(self, chat_id: int | str, message_id: int) -> bool:
+        url = f"{self.api_base}/bot{self.token}/deleteMessage"
+        try:
+            async with httpx.AsyncClient(timeout=15) as client:
+                resp = await client.post(url, json={"chat_id": chat_id, "message_id": message_id})
+                return resp.json().get("ok", False)
+        except Exception:
+            return False
+
+    async def send_chat_action(self, chat_id: int | str, action: str = "upload_video") -> bool:
+        url = f"{self.api_base}/bot{self.token}/sendChatAction"
+        try:
+            async with httpx.AsyncClient(timeout=15) as client:
+                resp = await client.post(url, json={"chat_id": chat_id, "action": action})
+                return resp.json().get("ok", False)
+        except Exception:
+            return False
+
+    async def answer_callback_query(self, callback_query_id: str, text: str | None = None) -> bool:
+        url = f"{self.api_base}/bot{self.token}/answerCallbackQuery"
+        payload: dict[str, Any] = {"callback_query_id": callback_query_id}
+        if text:
+            payload["text"] = text
+        try:
+            async with httpx.AsyncClient(timeout=15) as client:
+                resp = await client.post(url, json=payload)
+                return resp.json().get("ok", False)
+        except Exception:
+            return False
+
     async def send_media(
         self,
         file_path: Path,
@@ -97,10 +174,23 @@ class TelegramSender:
         caption: str | None = None,
         use_userbot: bool | None = None,
         items: list[Path] | None = None,
+        target_chat_id: str | int | None = None,
+        reply_to_message_id: int | None = None,
+        reply_markup: dict | None = None,
     ) -> dict:
+        cid = target_chat_id or self.chat_id
+        if not cid:
+            raise ValueError("No target chat_id provided")
+
         # Multiple media / album handling
         if items and len(items) > 1:
-            return await self._send_album(items, caption=caption, use_userbot=use_userbot)
+            return await self._send_album(
+                items,
+                caption=caption,
+                use_userbot=use_userbot,
+                target_chat_id=cid,
+                reply_to_message_id=reply_to_message_id,
+            )
 
         if not file_path.exists():
             raise FileNotFoundError(f"File not found: {file_path}")
@@ -110,75 +200,99 @@ class TelegramSender:
         # 1. Explicit userbot requested
         if use_userbot is True:
             if not self.can_use_userbot:
-                raise ValueError(
-                    "Telegram userbot requested, but credentials not configured "
-                    "(set TELEGRAM_API_ID, TELEGRAM_API_HASH, TELEGRAM_SESSION_STRING, TELEGRAM_CHAT_ID)"
-                )
-            return await self._send_via_userbot(file_path, filename, caption)
+                raise ValueError("Telegram userbot requested, but userbot credentials are not configured")
+            return await self._send_via_userbot(
+                file_path, filename, caption, target_chat_id=cid, reply_to_message_id=reply_to_message_id
+            )
 
         # 2. Explicit bot requested
         if use_userbot is False:
             if not self.can_use_bot:
-                raise ValueError("Telegram Bot not configured (set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID)")
+                raise ValueError("Telegram Bot not configured (set TELEGRAM_BOT_TOKEN)")
             if not self.uses_local_server and size > CLOUD_MAX_BYTES:
                 raise ValueError(
                     f"File is {size / (1024 * 1024):.1f}MB, exceeding the 50MB Bot API limit. "
                     "Use userbot or set use_userbot=True to send files over 50MB."
                 )
-            return await self._send_via_bot(file_path, filename, caption)
+            return await self._send_via_bot(
+                file_path,
+                filename,
+                caption,
+                target_chat_id=cid,
+                reply_to_message_id=reply_to_message_id,
+                reply_markup=reply_markup,
+            )
 
         # 3. Auto mode: File > 50MB automatically uses userbot
         if size > CLOUD_MAX_BYTES and not self.uses_local_server:
             if not self.can_use_userbot:
                 raise ValueError(
                     f"File is {size / (1024 * 1024):.1f}MB (>50MB Bot API limit). "
-                    "Telegram userbot credentials are required to send files over 50MB "
-                    "(set TELEGRAM_API_ID, TELEGRAM_API_HASH, TELEGRAM_SESSION_STRING)."
+                    "Telegram userbot credentials are required to send files over 50MB."
                 )
             logger.info("File size (%.1f MB > 50MB) auto-routed to userbot.", size / (1024 * 1024))
-            return await self._send_via_userbot(file_path, filename, caption)
+            return await self._send_via_userbot(
+                file_path, filename, caption, target_chat_id=cid, reply_to_message_id=reply_to_message_id
+            )
 
         # 4. Auto mode: File <= 50MB uses Bot API with userbot fallback
         if self.can_use_bot:
             try:
-                return await self._send_via_bot(file_path, filename, caption)
+                return await self._send_via_bot(
+                    file_path,
+                    filename,
+                    caption,
+                    target_chat_id=cid,
+                    reply_to_message_id=reply_to_message_id,
+                    reply_markup=reply_markup,
+                )
             except Exception as e:
                 if self.can_use_userbot:
                     logger.warning("Bot upload failed (%s). Falling back to userbot...", e)
-                    return await self._send_via_userbot(file_path, filename, caption)
+                    return await self._send_via_userbot(
+                        file_path, filename, caption, target_chat_id=cid, reply_to_message_id=reply_to_message_id
+                    )
                 raise
         elif self.can_use_userbot:
-            return await self._send_via_userbot(file_path, filename, caption)
-        else:
-            raise ValueError(
-                "Telegram not configured: configure TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID "
-                "or userbot credentials (TELEGRAM_API_ID, TELEGRAM_API_HASH, TELEGRAM_SESSION_STRING)."
+            return await self._send_via_userbot(
+                file_path, filename, caption, target_chat_id=cid, reply_to_message_id=reply_to_message_id
             )
+        else:
+            raise ValueError("Telegram not configured: configure TELEGRAM_BOT_TOKEN or userbot credentials.")
 
     async def _send_album(
         self,
         items: list[Path],
         caption: str | None = None,
         use_userbot: bool | None = None,
+        target_chat_id: str | int | None = None,
+        reply_to_message_id: int | None = None,
     ) -> dict:
+        cid = target_chat_id or self.chat_id
         total_size = sum(f.stat().st_size for f in items if f.exists())
         any_over_50mb = any(f.stat().st_size > CLOUD_MAX_BYTES for f in items if f.exists())
 
         if use_userbot is True:
             if not self.can_use_userbot:
                 raise ValueError("Telegram userbot requested for album, but userbot credentials are not configured")
-            return await self._send_album_via_userbot(items, caption)
+            return await self._send_album_via_userbot(
+                items, caption, target_chat_id=cid, reply_to_message_id=reply_to_message_id
+            )
 
         if use_userbot is False:
             if any_over_50mb or (not self.uses_local_server and total_size > CLOUD_MAX_BYTES):
                 raise ValueError("Album files exceed 50MB Bot API limit. Use userbot for larger albums.")
-            return await self._send_album_via_bot(items, caption)
+            return await self._send_album_via_bot(
+                items, caption, target_chat_id=cid, reply_to_message_id=reply_to_message_id
+            )
 
         # Auto mode
         if any_over_50mb or (not self.uses_local_server and total_size > CLOUD_MAX_BYTES):
             if self.can_use_userbot:
                 logger.info("Album size (%.1f MB) auto-routed to userbot.", total_size / (1024 * 1024))
-                return await self._send_album_via_userbot(items, caption)
+                return await self._send_album_via_userbot(
+                    items, caption, target_chat_id=cid, reply_to_message_id=reply_to_message_id
+                )
             raise ValueError(
                 f"Album total size ({total_size / (1024 * 1024):.1f}MB) exceeds 50MB Bot API limit, "
                 "and userbot credentials are not configured."
@@ -186,14 +300,20 @@ class TelegramSender:
 
         if self.can_use_bot:
             try:
-                return await self._send_album_via_bot(items, caption)
+                return await self._send_album_via_bot(
+                    items, caption, target_chat_id=cid, reply_to_message_id=reply_to_message_id
+                )
             except Exception as e:
                 if self.can_use_userbot:
                     logger.warning("Bot album send failed (%s). Falling back to userbot...", e)
-                    return await self._send_album_via_userbot(items, caption)
+                    return await self._send_album_via_userbot(
+                        items, caption, target_chat_id=cid, reply_to_message_id=reply_to_message_id
+                    )
                 raise
         elif self.can_use_userbot:
-            return await self._send_album_via_userbot(items, caption)
+            return await self._send_album_via_userbot(
+                items, caption, target_chat_id=cid, reply_to_message_id=reply_to_message_id
+            )
         else:
             raise ValueError("Telegram not configured for album sending.")
 
@@ -201,7 +321,10 @@ class TelegramSender:
         self,
         items: list[Path],
         caption: str | None = None,
+        target_chat_id: str | int | None = None,
+        reply_to_message_id: int | None = None,
     ) -> dict:
+        cid = target_chat_id or self.chat_id
         total_size = sum(f.stat().st_size for f in items if f.exists())
         if total_size > USERBOT_MAX_BYTES:
             raise ValueError(f"Album total size ({total_size / (1024*1024):.1f}MB) exceeds userbot limit (2000MB)")
@@ -215,7 +338,7 @@ class TelegramSender:
             str(self.session_string),
         )
 
-        target = self.chat_id
+        target = cid
         if isinstance(target, str) and (target.isdigit() or (target.startswith("-") and target[1:].isdigit())):
             target = int(target)
 
@@ -234,6 +357,7 @@ class TelegramSender:
                 entity,
                 file=[str(f) for f in chunk],
                 caption=chunk_caption,
+                reply_to=reply_to_message_id if idx == 0 else None,
             )
             if isinstance(res, list):
                 all_message_ids.extend([m.id for m in res])
@@ -244,8 +368,8 @@ class TelegramSender:
         return {
             "message_id": first_id,
             "message_ids": all_message_ids,
-            "chat_id": self.chat_id,
-            "link": self._chat_link(first_id),
+            "chat_id": cid,
+            "link": self._chat_link(first_id, chat_id=cid),
             "sender": "userbot",
             "is_album": True,
             "media_count": len(items),
@@ -255,7 +379,10 @@ class TelegramSender:
         self,
         items: list[Path],
         caption: str | None = None,
+        target_chat_id: str | int | None = None,
+        reply_to_message_id: int | None = None,
     ) -> dict:
+        cid = target_chat_id or self.chat_id
         total_size = sum(f.stat().st_size for f in items if f.exists())
         if not self.uses_local_server and total_size > CLOUD_MAX_BYTES:
             raise ValueError(f"Album total size ({total_size / (1024*1024):.1f}MB) exceeds 50MB Bot API limit")
@@ -293,10 +420,13 @@ class TelegramSender:
                         files[attach_name] = (file_path.name, fp, mime)
 
                     url = f"{self.api_base}/bot{self.token}/sendMediaGroup"
-                    payload = {
-                        "chat_id": self.chat_id,
+                    payload: dict[str, Any] = {
+                        "chat_id": cid,
                         "media": json.dumps(media),
                     }
+                    if reply_to_message_id and idx == 0:
+                        payload["reply_parameters"] = json.dumps({"message_id": reply_to_message_id})
+
                     resp = await client.post(url, data=payload, files=files)
                     data = resp.json()
                     if not data.get("ok"):
@@ -315,8 +445,8 @@ class TelegramSender:
         return {
             "message_id": first_id,
             "message_ids": all_message_ids,
-            "chat_id": self.chat_id,
-            "link": self._chat_link(first_id),
+            "chat_id": cid,
+            "link": self._chat_link(first_id, chat_id=cid),
             "sender": "bot",
             "is_album": True,
             "media_count": len(items),
@@ -327,12 +457,15 @@ class TelegramSender:
         file_path: Path,
         filename: str,
         caption: str | None = None,
+        target_chat_id: str | int | None = None,
+        reply_to_message_id: int | None = None,
+        reply_markup: dict | None = None,
     ) -> dict:
+        cid = target_chat_id or self.chat_id
         size = file_path.stat().st_size
         if not self.uses_local_server and size > CLOUD_MAX_BYTES:
             raise ValueError(
-                f"File is {size / (1024 * 1024):.1f}MB, but the Telegram cloud Bot API "
-                "only accepts files up to 50MB."
+                f"File is {size / (1024 * 1024):.1f}MB, but the Telegram cloud Bot API only accepts files up to 50MB."
             )
         if self.uses_local_server and size > LOCAL_MAX_BYTES:
             raise ValueError(
@@ -345,9 +478,13 @@ class TelegramSender:
         cap = (caption or "").strip()[:1024]
 
         url = f"{self.api_base}/bot{self.token}/{method}"
-        payload: dict = {"chat_id": self.chat_id}
+        payload: dict[str, Any] = {"chat_id": cid}
         if cap:
             payload["caption"] = cap
+        if reply_to_message_id:
+            payload["reply_parameters"] = json.dumps({"message_id": reply_to_message_id})
+        if reply_markup:
+            payload["reply_markup"] = json.dumps(reply_markup)
 
         async with httpx.AsyncClient(timeout=900) as client:
             with open(file_path, "rb") as f:
@@ -365,8 +502,8 @@ class TelegramSender:
         message_id = data["result"]["message_id"]
         return {
             "message_id": message_id,
-            "chat_id": self.chat_id,
-            "link": self._chat_link(message_id),
+            "chat_id": cid,
+            "link": self._chat_link(message_id, chat_id=cid),
             "sender": "bot",
             "is_album": False,
             "media_count": 1,
@@ -377,7 +514,10 @@ class TelegramSender:
         file_path: Path,
         filename: str,
         caption: str | None = None,
+        target_chat_id: str | int | None = None,
+        reply_to_message_id: int | None = None,
     ) -> dict:
+        cid = target_chat_id or self.chat_id
         size = file_path.stat().st_size
         if size > USERBOT_MAX_BYTES:
             raise ValueError(
@@ -395,7 +535,7 @@ class TelegramSender:
             str(self.session_string),
         )
 
-        target = self.chat_id
+        target = cid
         if isinstance(target, str) and (target.isdigit() or (target.startswith("-") and target[1:].isdigit())):
             target = int(target)
 
@@ -418,20 +558,21 @@ class TelegramSender:
             caption=cap,
             force_document=not (is_video or is_audio or is_image),
             supports_streaming=is_video,
+            reply_to=reply_to_message_id,
         )
 
         message_id = msg.id
         return {
             "message_id": message_id,
-            "chat_id": self.chat_id,
-            "link": self._chat_link(message_id),
+            "chat_id": cid,
+            "link": self._chat_link(message_id, chat_id=cid),
             "sender": "userbot",
             "is_album": False,
             "media_count": 1,
         }
 
-    def _chat_link(self, message_id: int) -> str:
-        cid = str(self.chat_id)
+    def _chat_link(self, message_id: int, chat_id: str | int | None = None) -> str:
+        cid = str(chat_id or self.chat_id)
         if cid.startswith("-100"):
             public = cid[4:]
         else:

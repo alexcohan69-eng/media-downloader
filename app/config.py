@@ -21,12 +21,22 @@ class Settings(BaseSettings):
     telegram_api_hash: str | None = None
     telegram_session_string: str | None = None
     cors_origins: list[str] = ["*"]
+    public_url: str | None = None
+    render_external_url: str | None = None
+    telegram_webhook_secret: str | None = None
 
     model_config = {
         "env_file": ".env",
         "env_file_encoding": "utf-8",
         "extra": "ignore",
     }
+
+    @property
+    def effective_public_url(self) -> str | None:
+        url = self.public_url or self.render_external_url
+        if url:
+            return url.rstrip("/")
+        return "https://media-downloader-tnew.onrender.com"
 
     @property
     def max_file_size_bytes(self) -> int:
