@@ -122,7 +122,7 @@
     <div class="card-title">Configuration</div>
     <div class="input-group">
       <label>API Key</label>
-      <input type="text" id="apiKey" placeholder="Enter your API key">
+      <input type="text" id="apiKey" value="test-secret-key-123" placeholder="Enter your API key">
     </div>
   </div>
 
@@ -252,7 +252,7 @@
 const API = '';
 const $ = id => document.getElementById(id);
 
-;(function() {
+;(async function() {
   const st = $('sendTelegram'), at = $('autoTranslate');
   st.checked = localStorage.getItem('sendTelegram') === '1';
   at.checked = localStorage.getItem('autoTranslate') !== '0';
@@ -260,6 +260,29 @@ const $ = id => document.getElementById(id);
   styleToggle('trToggleItem', at.checked, true);
   st.addEventListener('change', () => { localStorage.setItem('sendTelegram', st.checked?'1':'0'); styleToggle('tgToggleItem', st.checked, false); });
   at.addEventListener('change', () => { localStorage.setItem('autoTranslate', at.checked?'1':'0'); styleToggle('trToggleItem', at.checked, true); });
+
+  // Auto-fill API Key
+  const DEFAULT_KEY = 'test-secret-key-123';
+  const storedKey = localStorage.getItem('apiKey');
+  $('apiKey').value = storedKey || DEFAULT_KEY;
+  if (!storedKey) localStorage.setItem('apiKey', DEFAULT_KEY);
+
+  try {
+    const cfgRes = await fetch(`${API}/api/v1/config`);
+    if (cfgRes.ok) {
+      const cfg = await cfgRes.json();
+      if (cfg && cfg.default_api_key) {
+        if (!localStorage.getItem('apiKey') || $('apiKey').value === DEFAULT_KEY) {
+          $('apiKey').value = cfg.default_api_key;
+          localStorage.setItem('apiKey', cfg.default_api_key);
+        }
+      }
+    }
+  } catch (e) {}
+
+  $('apiKey').addEventListener('input', () => {
+    localStorage.setItem('apiKey', $('apiKey').value.trim() || DEFAULT_KEY);
+  });
 })();
 
 function styleToggle(id, active, teal) {
@@ -300,7 +323,11 @@ function setLoading(on) {
   $('progressBar').className = on ? 'progress-bar show' : 'progress-bar';
   if (on) setProgress(0);
 }
-function clearForm() { $('mediaUrl').value=''; $('customTitle').value=''; }
+function clearForm() {
+  const u = $('mediaUrl'), c = $('customTitle');
+  if (u) { u.value = ''; u.focus(); }
+  if (c) c.value = '';
+}
 function apiKey() { return $('apiKey').value; }
 
 function renderDetails(data, fileSize, resolution) {
@@ -419,7 +446,26 @@ async function downloadMedia() {
       const td = await tryTranslate(info.title);
       if (td && td.was_translated) { showTrBar(td.detected_lang, td.translated); $('dCaption').textContent = td.translated; $('dTitle').textContent = td.translated; }
     }
-    setProgress(100); setStatus(''); clearForm();
+    // Trigger download in browser
+    const cd = res.headers.get('Content-Disposition');
+    let dlName = 'download';
+    if (cd && cd.includes('filename=')) {
+      const match = cd.match(/filename="?([^";]+)"?/);
+      if (match && match[1]) dlName = match[1].trim();
+    } else {
+      dlName = (info && info.title ? info.title.slice(0, 40) : 'media') + (ct.includes('zip') ? '.zip' : ct.includes('video') ? '.mp4' : ct.includes('audio') ? '.mp3' : '.jpg');
+    }
+    const dlLink = document.createElement('a');
+    dlLink.href = URL.createObjectURL(blob);
+    dlLink.download = dlName;
+    document.body.appendChild(dlLink);
+    dlLink.click();
+    setTimeout(() => { document.body.removeChild(dlLink); URL.revokeObjectURL(dlLink.href); }, 1000);
+
+    setProgress(100);
+    clearForm();
+    setStatus('success', 'Download complete! Input cleared for next URL.');
+    setTimeout(() => { if ($('status').classList.contains('success')) setStatus(''); }, 5000);
   } catch(e) { setStatus('error', e.message); }
   finally { clearInterval(timer); setLoading(false); }
 }

@@ -51,6 +51,12 @@ async def health_check():
     return {"status": "ok"}
 
 
+@app.get("/api/v1/config")
+async def get_config():
+    default_key = settings.api_keys[0] if settings.api_keys else "test-secret-key-123"
+    return {"default_api_key": default_key}
+
+
 @app.get("/playground")
 async def playground():
     return FileResponse(
