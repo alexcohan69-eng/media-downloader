@@ -25,6 +25,7 @@ def build_ydl_opts(
     }
 
     cookie_file = cookie_file or settings.cookie_file
+    browser = cookie_browser or settings.cookie_browser
     if cookie_file:
         if not Path(cookie_file).exists():
             raise ValueError(
@@ -32,7 +33,7 @@ def build_ydl_opts(
                 "(export as Netscape cookies.txt; e.g. with a browser extension)"
             )
         opts["cookiefile"] = cookie_file
-    else:
+    elif browser:
         opts["cookiesfrombrowser"] = (browser,)
 
     if audio_only:

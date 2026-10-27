@@ -54,6 +54,7 @@ class DownloadResult:
     file_size: int
     tmp_path: Path
     file_path: Path
+    title: str | None = None
     items: list[DownloadedItem] = field(default_factory=list)
     is_album: bool = False
 
@@ -247,7 +248,14 @@ class MediaDownloader:
                 ]
             )
 
-            resolved_title = title or (fallback_page.title if fallback_page else None) or info.get("title") or "download"
+            resolved_title = (
+                title
+                or (fallback_page.title if fallback_page else None)
+                or info.get("title")
+                or info.get("description")
+                or "download"
+            )
+            raw_title = resolved_title if resolved_title != "download" else None
             safe_stem = "".join(
                 c if (c.isalnum() and ord(c) < 128) or c in "._-" else "_" for c in resolved_title
             )[:200].strip("._")
@@ -282,6 +290,7 @@ class MediaDownloader:
                     file_size=file_size,
                     tmp_path=batch_dir,
                     file_path=single_file,
+                    title=raw_title,
                     items=items,
                     is_album=False,
                 )
@@ -321,6 +330,7 @@ class MediaDownloader:
                 file_size=zip_size,
                 tmp_path=batch_dir,
                 file_path=zip_path,
+                title=raw_title,
                 items=items,
                 is_album=True,
             )

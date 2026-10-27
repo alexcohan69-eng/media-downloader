@@ -7,7 +7,7 @@ from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
     api_keys: list[str] = ["changeme"]
-    cookie_browser: str = "chrome"
+    cookie_browser: str | None = None
     cookie_file: str | None = None
     default_format: str = "best"
     max_file_size_mb: int = 2048

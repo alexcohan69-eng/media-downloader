@@ -128,13 +128,15 @@ async def download_media(
         raise HTTPException(status_code=400, detail=str(e))
 
     # Resolve caption, optionally translate
-    caption = _real_title(downloader, url, title)
+    caption = title or result.title or _real_title(downloader, url, title)
     translated_caption = caption
     detected_lang: str | None = None
     sent: dict = {}
 
     if auto_translate and caption:
         translated_caption, detected_lang = detect_and_translate(caption)
+        if detected_lang and detected_lang not in ("en", "bn") and translated_caption != caption:
+            translated_caption = f"{translated_caption}\n\n🌐 (Translated from {detected_lang.upper()})"
 
     if send_telegram:
         sender = TelegramSender()

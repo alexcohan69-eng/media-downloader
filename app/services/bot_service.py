@@ -203,15 +203,14 @@ async def _download_and_reply(
         await sender.send_chat_action(chat_id, "upload_video")
 
         # Resolve and translate title/caption
-        caption = result.filename
-        try:
-            info = downloader.get_info(url)
-            if info.title:
-                caption = info.title
-        except Exception:
-            pass
-
-        translated_caption, _ = detect_and_translate(caption)
+        raw_caption = result.title
+        translated_caption = None
+        if raw_caption:
+            translated, detected_lang = detect_and_translate(raw_caption)
+            if detected_lang and detected_lang not in ("en", "bn") and translated != raw_caption:
+                translated_caption = f"{translated}\n\n🌐 <i>(Translated from {detected_lang.upper()})</i>"
+            else:
+                translated_caption = raw_caption
 
         # Inline button for extracting audio (if video)
         reply_markup = None
