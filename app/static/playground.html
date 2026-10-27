@@ -319,7 +319,6 @@ function setStatus(type, msg) {
   sp.style.display = type === 'loading' ? 'block' : 'none';
 }
 function setLoading(on) {
-  $('infoBtn').disabled = on; $('downloadBtn').disabled = on;
   $('progressBar').className = on ? 'progress-bar show' : 'progress-bar';
   if (on) setProgress(0);
 }
@@ -397,6 +396,7 @@ async function getInfo() {
   const url = $('mediaUrl').value.trim();
   if (!url) { setStatus('error', 'Please enter a URL'); return; }
   const qs = buildQS(true);
+  clearForm();
   setLoading(true); setStatus('loading', 'Extracting media info…'); hideTrBar();
   try {
     const res = await fetch(`${API}/api/v1/info?${qs}`, { headers: { 'X-API-Key': apiKey() } });
@@ -416,6 +416,7 @@ async function downloadMedia() {
   const url = $('mediaUrl').value.trim();
   if (!url) { setStatus('error', 'Please enter a URL'); return; }
   const qs = buildQS(false), infoQS = buildQS(true);
+  clearForm();
   setLoading(true); setStatus('loading', 'Downloading media…'); hideTrBar(); hideTGBar();
   let progress = 0;
   const timer = setInterval(() => { progress = Math.min(progress + Math.random()*7, 90); setProgress(progress); }, 800);
