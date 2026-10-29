@@ -1,13 +1,9 @@
 from __future__ import annotations
 
 import asyncio
-import datetime
 import html
 import logging
 import re
-import shutil
-import tempfile
-from pathlib import Path
 from typing import Any
 
 import httpx
@@ -15,7 +11,6 @@ import httpx
 from app.config import settings
 from app.services.downloader import MediaDownloader
 from app.services.telegram import TelegramSender
-from app.services.timestamp import update_image_timestamp
 from app.services.translator import detect_and_translate
 
 logger = logging.getLogger(__name__)
@@ -31,13 +26,12 @@ def get_start_message() -> tuple[str, dict]:
         "Send me any media link from <b>TikTok, Instagram, YouTube, Twitter/X, Facebook, "
         "Reddit, Pinterest, SoundCloud</b> and I will download and send it to you instantly!\n\n"
         "✨ <b>Features:</b>\n"
-        "• 🎬 <b>High Quality Video & Audio:</b> Full resolution downloads\n"
+        "• 🎬 <b>High Quality Video & Audio:</b> Full resolution videos\n"
         "• 🖼️ <b>Carousels & Albums:</b> All photos/videos downloaded together\n"
-        "• 📸 <b>Timestamp Editor:</b> Send any photo to update/add camera timestamp\n"
         "• 🌐 <b>Auto-Translation:</b> Foreign titles translated to English\n"
         "• ⚡ <b>Large Files:</b> Up to 2GB supported automatically\n"
         "• 👥 <b>Works in Groups:</b> Add me to any group chat!\n\n"
-        "<i>Just drop a link or photo below to get started!</i>"
+        "<i>Just drop a link below to get started!</i>"
     )
     markup = {
         "inline_keyboard": [
@@ -61,15 +55,23 @@ def get_start_message() -> tuple[str, dict]:
 def get_help_message() -> tuple[str, dict]:
     text = (
         "📖 <b>How to use Zeba Saver:</b>\n\n"
-        "<b>Media Downloader:</b>\n"
-        "• Paste any link from TikTok, Instagram, YouTube, X, Reddit, etc.\n"
-        "• The bot will automatically download and deliver the media back to you!\n\n"
-        "<b>Photo Timestamp Editor:</b>\n"
-        "• Send any photo to update or add an authentic smartphone camera timestamp.\n"
-        "• By default it uses current date & time, or write your custom date in the caption (e.g. <code>Oct 30, 2026, 02:00</code>).\n\n"
+        "<b>In Private Messages:</b>\n"
+        "1. Copy any video, reel, post, or audio link.\n"
+        "2. Paste and send it here.\n"
+        "3. The bot will download and deliver the media back to you!\n\n"
         "<b>In Telegram Groups:</b>\n"
-        "• Add @MissZeba_Auto_Save_Bot to your group.\n"
-        "• Whenever any member shares a link, the bot replies with the media directly."
+        "1. Add @MissZeba_Auto_Save_Bot to your group.\n"
+        "2. No admin permissions needed!\n"
+        "3. Whenever any member shares a link, the bot replies with the media directly.\n\n"
+        "<b>Supported Platforms:</b>\n"
+        "• TikTok (No watermark)\n"
+        "• Instagram (Reels, Posts, Carousels, Stories)\n"
+        "• YouTube & Shorts\n"
+        "• Twitter / X\n"
+        "• Facebook & Reels\n"
+        "• Reddit\n"
+        "• Pinterest\n"
+        "• SoundCloud & 1,000+ others!"
     )
     markup = {
         "inline_keyboard": [
@@ -129,8 +131,7 @@ async def process_update(update: dict[str, Any]) -> None:
                         chat_id, status_id, f"❌ <b>Audio extraction failed:</b> {html.escape(str(e))}"
                     )
             finally:
-                if result and result.tmp_path:
-                    downloader._cleanup(result.tmp_path)
+                downloader._cleanup(getattr(result, "tmp_path", None) if "result" in locals() else None)
         return
 
     # 2. Handle Messages
@@ -144,17 +145,7 @@ async def process_update(update: dict[str, Any]) -> None:
     msg_id = message.get("message_id")
     text = message.get("text") or message.get("caption") or ""
 
-    if not chat_id:
-        return
-
-    # Check if a photo or image document was sent -> Timestamp Editor
-    is_photo = bool(message.get("photo"))
-    is_image_doc = bool(message.get("document") and message.get("document", {}).get("mime_type", "").startswith("image/"))
-    if is_photo or is_image_doc:
-        await _handle_photo_timestamp(sender, chat_id, msg_id, message)
-        return
-
-    if not text:
+    if not chat_id or not text:
         return
 
     text_clean = text.strip()
@@ -182,7 +173,7 @@ async def process_update(update: dict[str, Any]) -> None:
         if chat_type == "private":
             await sender.send_message(
                 chat_id,
-                "💡 Please send a media link (TikTok, Instagram, YouTube, X, Reddit) or a photo to update its timestamp!",
+                "💡 Please send or paste a valid media link from TikTok, Instagram, YouTube, X, Reddit, etc.",
                 reply_to_message_id=msg_id,
             )
         return
@@ -190,85 +181,6 @@ async def process_update(update: dict[str, Any]) -> None:
     # Process extracted URL(s)
     for url in urls[:3]:  # Limit max 3 links per message to avoid spam
         await _download_and_reply(sender, chat_id, msg_id, url)
-
-
-async def _handle_photo_timestamp(
-    sender: TelegramSender,
-    chat_id: int | str,
-    reply_to_message_id: int,
-    message: dict[str, Any],
-) -> None:
-    token = settings.telegram_bot_token
-    if not token:
-        return
-
-    photo_list = message.get("photo")
-    doc = message.get("document")
-    if photo_list:
-        file_id = photo_list[-1]["file_id"]
-    elif doc and doc.get("mime_type", "").startswith("image/"):
-        file_id = doc["file_id"]
-    else:
-        return
-
-    await sender.send_chat_action(chat_id, "upload_photo")
-    status_msg = await sender.send_message(
-        chat_id, "🕒 <i>Updating camera timestamp…</i>", reply_to_message_id=reply_to_message_id
-    )
-    status_id = status_msg.get("result", {}).get("message_id")
-
-    settings.temp_path.mkdir(parents=True, exist_ok=True)
-    tmp_dir = Path(tempfile.mkdtemp(dir=settings.temp_path, prefix="ts_"))
-    in_file = tmp_dir / "input.jpg"
-    out_file = tmp_dir / "output.jpg"
-
-    try:
-        # 1. Download file from Telegram
-        async with httpx.AsyncClient(timeout=40) as client:
-            info_res = await client.get(f"https://api.telegram.org/bot{token}/getFile", params={"file_id": file_id})
-            file_data = info_res.json()
-            if not file_data.get("ok"):
-                raise ValueError("Could not fetch file info from Telegram")
-            file_path_tg = file_data["result"]["file_path"]
-            dl_res = await client.get(f"https://api.telegram.org/file/bot{token}/{file_path_tg}")
-            if dl_res.status_code != 200:
-                raise ValueError("Could not download file from Telegram")
-            in_file.write_bytes(dl_res.content)
-
-        # 2. Extract custom text from caption if given
-        caption = (message.get("caption") or "").strip()
-        custom_text = caption if caption and not caption.startswith("/") else None
-
-        # 3. Process image with update_image_timestamp
-        result_path = await asyncio.to_thread(
-            update_image_timestamp,
-            image_path=in_file,
-            output_path=out_file,
-            custom_text=custom_text,
-            position="bottom-left",
-        )
-
-        # 4. Reply with edited photo
-        ts_shown = custom_text or datetime.datetime.now().strftime("%b %d, %Y, %H:%M")
-        await sender.send_media(
-            file_path=result_path,
-            filename="timestamped.jpg",
-            caption=f"✅ <b>Timestamp updated:</b> <code>{ts_shown}</code>",
-            target_chat_id=chat_id,
-            reply_to_message_id=reply_to_message_id,
-        )
-
-        if status_id:
-            await sender.delete_message(chat_id, status_id)
-
-    except Exception as e:
-        logger.error("Timestamp processing error: %s", e)
-        if status_id:
-            await sender.edit_message_text(
-                chat_id, status_id, f"❌ <b>Timestamp update failed:</b> {html.escape(str(e))}"
-            )
-    finally:
-        shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
 async def _download_and_reply(

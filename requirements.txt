@@ -8,5 +8,3 @@ httpx>=0.28.0
 deep-translator>=1.11.0
 langdetect>=1.0.9
 telethon>=1.40.0
-pillow>=11.0.0
-opencv-python-headless>=4.8.0
